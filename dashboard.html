@@ -1,0 +1,341 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>THE Rankings - UFF Comparison Dashboard</title>
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<style>
+  body { font-family: Arial, sans-serif; margin: 20px; }
+  h1 { margin-bottom: 6px; }
+  .controls { margin-bottom: 12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;}
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .chart-card { border: 1px solid #e0e0e0; padding: 8px; border-radius: 6px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+  .table-sample { margin-top: 18px; border-collapse: collapse; width:100%; }
+  .table-sample th, .table-sample td { border: 1px solid #ddd; padding: 6px 8px; font-size: 13px; }
+  .table-sample th { background: #f7f7f7; }
+  #status { color: #666; margin-top:6px; }
+  footer { margin-top:18px; font-size:13px; color:#666; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<h1>THE Rankings — UFF Comparison Dashboard</h1>
+
+<div class="controls">
+  <label for="compareSelect"><strong>Compare UFF with:</strong></label>
+  <select id="compareSelect" style="min-width:320px"></select>
+  <div style="display:flex;gap:8px;align-items:center">
+    <button id="refreshBtn">Refresh</button>
+    <span id="status">Loading data...</span>
+  </div>
+</div>
+
+<div style="padding-bottom: 10px">
+  <label>Start: <select id="minYear"></select> </label>
+  <label>End: <select id="maxYear"></select> </label>
+  <button id="applyFilter">Update</button>
+</div>
+
+<div id="charts" class="grid"></div>
+
+<h3>All universities (sample)</h3>
+<div id="tableArea"></div>
+
+<footer>
+ Dashboard generated client-side. Data sources:
+ <ul>
+  <li><a href="https://raw.githubusercontent.com/pjfernandes/ruf/refs/heads/main/2023.csv" target="_blank">2023.csv</a></li>
+  <li><a href="https://raw.githubusercontent.com/pjfernandes/ruf/refs/heads/main/2024.csv" target="_blank">2024.csv</a></li>
+  <li><a href="https://raw.githubusercontent.com/pjfernandes/ruf/refs/heads/main/2025.csv" target="_blank">2025.csv</a></li>
+ </ul>
+</footer>
+
+<script>
+(async function(){
+  const urls = [
+    {url: "https://raw.githubusercontent.com/pjfernandes/ruf/refs/heads/main/2023.csv", year: 2023},
+    {url: "https://raw.githubusercontent.com/pjfernandes/ruf/refs/heads/main/2024.csv", year: 2024},
+    {url: "https://raw.githubusercontent.com/pjfernandes/ruf/refs/heads/main/2025.csv", year: 2025}
+  ];
+
+  const statusEl = document.getElementById('status');
+  const compareSelect = document.getElementById('compareSelect');
+  const refreshBtn = document.getElementById('refreshBtn');
+  const chartsDiv = document.getElementById('charts');
+  const tableArea = document.getElementById('tableArea');
+  const minYearSelect = document.getElementById("minYear");
+  const maxYearSelect = document.getElementById("maxYear");
+
+  // Colunas numéricas esperadas na sua estrutura (conforme você informou)
+  const numericCols = ["Nota","Nota em Ensino","Nota em Pesquisa","Nota em Mercado","Nota em Inovação","Nota em Internacionalização"];
+
+  // Nome exato da UFF conforme seu CSV (ajuste se necessário)
+  const uffName = "Universidade Federal Fluminense";
+
+  function parseNumber(v){
+    if(v === null || v === undefined) return NaN;
+    let s = String(v).replace(/\u2013|\u2014/g,'-').trim(); // tratar traços longos
+    // normalizar separador decimal (vírgula -> ponto) mas evitar remover pontos de milhares
+    // Strategy: remove non-digit except dot/comma/minus, then replace last comma with dot if exists and no dot after comma
+    s = s.replace(/[^\d,.-]/g,'');
+    if(s.indexOf(',') !== -1 && s.indexOf('.') === -1){
+      s = s.replace(',', '.');
+    } else if (s.indexOf(',') !== -1 && s.indexOf('.') !== -1) {
+      // se ambos existem, assume '.' é milhar e ',' decimal -> remove dots then replace comma
+      s = s.replace(/\./g,'').replace(',', '.');
+    }
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : NaN;
+  }
+
+  try{
+    statusEl.textContent = 'Downloading CSVs...';
+    const texts = await Promise.all(urls.map(u =>
+      fetch(u.url).then(r => {
+        if(!r.ok) {
+          console.warn('Failed to fetch', u.url, r.status);
+          return '';
+        }
+        return r.text();
+      }).catch(err=>{
+        console.warn('Fetch error', u.url, err);
+        return '';
+      })
+    ));
+
+    statusEl.textContent = 'Parsing CSVs...';
+    let rows = [];
+    for(let i=0;i<texts.length;i++){
+      if(!texts[i]) continue;
+      const parsed = Papa.parse(texts[i], {header:true, skipEmptyLines:true});
+      if(parsed && parsed.data){
+        parsed.data.forEach(r => {
+          // include year
+          r.Year = urls[i].year;
+          rows.push(r);
+        });
+      }
+    }
+
+    if(rows.length === 0){
+      statusEl.textContent = 'Nenhum dado disponível (verifique URLs / CSVs).';
+      return;
+    }
+
+    // Trim keys
+    rows = rows.map(r => {
+      const obj = {};
+      Object.keys(r).forEach(k => {
+        const kk = k ? k.trim() : k;
+        obj[kk] = r[k];
+      });
+      return obj;
+    });
+
+    // Determine nameKey: prefer explicit 'Universidade' then fallback to common english keys or first string column
+    function detectNameKey(){
+      const sampleKeys = Object.keys(rows[0]);
+      const candidates = ['Universidade','Universidade ','Universidade (Name)','Name','Nome','Institution','University'];
+      for(const c of candidates){
+        const found = sampleKeys.find(k => k && k.trim().toLowerCase() === c.trim().toLowerCase());
+        if(found) return found;
+      }
+      // fallback to first column that looks like string for most rows
+      for(const k of sampleKeys){
+        if(rows.some(r => typeof r[k] === 'string' && r[k].trim() !== '')) return k;
+      }
+      return sampleKeys[0];
+    }
+    const nameKey = detectNameKey();
+
+    // detect Estado column if exists
+    const stateKey = Object.keys(rows[0]).find(k => k && k.toLowerCase().includes('estado')) || 'Estado';
+
+    // Use entire dataset (no country filter) because CSVs are BR
+    const dataset = rows;
+
+    // Normalize numeric columns presence
+    const allNumericCols = numericCols.filter(col => dataset.some(r => Object.prototype.hasOwnProperty.call(r, col)));
+
+    // Convert numeric columns in dataset
+    dataset.forEach(r => {
+      allNumericCols.forEach(c => {
+        if(Object.prototype.hasOwnProperty.call(r, c)){
+          r[c] = parseNumber(r[c]);
+        }
+      });
+      // also ensure Year numeric
+      if(r.Year) r.Year = +r.Year;
+    });
+
+    // Build university names list (unique)
+    const names = [...new Set(dataset.map(r => r[nameKey]).filter(Boolean))].sort((a,b)=> String(a).localeCompare(String(b)));
+
+    // populate compareSelect (dropdown)
+    compareSelect.innerHTML = '';
+    names.filter(n => String(n).trim() && String(n).trim().toLowerCase() !== uffName.toLowerCase()).forEach(n => {
+      const o = document.createElement('option');
+      o.value = n;
+      o.textContent = n;
+      compareSelect.appendChild(o);
+    });
+
+    // build sample table (first 12 rows)
+    const sampleRows = dataset.slice(0, 12);
+    let html = `<table class="table-sample"><thead><tr>`;
+    const headers = [nameKey || 'Universidade', stateKey || 'Estado', 'Year'].concat(allNumericCols);
+    headers.forEach(h => { html += `<th>${h}</th>`; });
+    html += `</tr></thead><tbody>`;
+    sampleRows.forEach(r => {
+      html += `<tr>`;
+      headers.forEach(k => {
+        const v = r[k];
+        let out = '';
+        if(v === null || v === undefined || (typeof v === 'string' && v.trim()==='')) out = '';
+        else if(typeof v === 'number' && !isNaN(v)) out = v.toFixed(2);
+        else out = String(v);
+        html += `<td>${out}</td>`;
+      });
+      html += `</tr>`;
+    });
+    html += `</tbody></table>`;
+    tableArea.innerHTML = html;
+
+    statusEl.textContent = 'Ready';
+
+    // years select
+    const yearsAvailable = [...new Set(dataset.map(r=> +r.Year).filter(Boolean))].sort((a,b)=>a-b);
+    const start = Math.min(...yearsAvailable);
+    const end = Math.max(...yearsAvailable);
+    for (let y = start; y <= end; y++) {
+      minYearSelect.add(new Option(y, y));
+      maxYearSelect.add(new Option(y, y));
+    }
+    minYearSelect.value = start;
+    maxYearSelect.value = end;
+
+    // render function
+    function renderFor(compareTo){
+      chartsDiv.innerHTML = '';
+      const minY = parseInt(minYearSelect.value);
+      const maxY = parseInt(maxYearSelect.value);
+      const allYears = Array.from({length: maxY - minY + 1}, (_,i)=>minY + i);
+
+      if(!compareTo){
+        chartsDiv.innerHTML = '<div class="chart-card">Selecione uma universidade para comparar.</div>';
+        return;
+      }
+
+      allNumericCols.forEach(metric => {
+        const card = document.createElement('div');
+        card.className = 'chart-card';
+        const title = document.createElement('div');
+        title.innerHTML = `<strong>${metric}</strong>`;
+        const plotDiv = document.createElement('div');
+        plotDiv.style.width = '100%';
+        plotDiv.style.height = '320px';
+        card.appendChild(title);
+        card.appendChild(plotDiv);
+        chartsDiv.appendChild(card);
+
+        // data for UFF and comparator
+        const dataUff = dataset.filter(r => String(r[nameKey]).trim() === String(uffName).trim()).map(r => ({...r, Year: +r.Year}));
+        const dataCmp = dataset.filter(r => String(r[nameKey]).trim() === String(compareTo).trim()).map(r => ({...r, Year: +r.Year}));
+
+        const uffY = allYears.map(y => {
+          const d = dataUff.find(e => e.Year === y);
+          return d && typeof d[metric] === 'number' && !isNaN(d[metric]) ? d[metric] : null;
+        });
+        const cmpY = allYears.map(y => {
+          const d = dataCmp.find(e => e.Year === y);
+          return d && typeof d[metric] === 'number' && !isNaN(d[metric]) ? d[metric] : null;
+        });
+
+        const trace1 = {
+          x: allYears,
+          y: uffY,
+          mode: 'lines+markers',
+          name: uffName,
+          line: { dash: 'solid', width: 2 },
+          marker: { size: 6 }
+        };
+        const trace2 = {
+          x: allYears,
+          y: cmpY,
+          mode: 'lines+markers',
+          name: compareTo,
+          line: { dash: 'dash', width: 2 },
+          marker: { size: 6 }
+        };
+
+        // annotations for values
+        const annotations = [];
+        allYears.forEach((year, i) => {
+          if (uffY[i] != null) {
+            annotations.push({ x: year, y: uffY[i], text: Number(uffY[i]).toFixed(2), showarrow: false, font: { size: 10 }, yanchor: 'bottom' });
+          }
+          if (cmpY[i] != null) {
+            annotations.push({ x: year, y: cmpY[i], text: Number(cmpY[i]).toFixed(2), showarrow: false, font: { size: 10 }, yanchor: 'bottom' });
+          }
+        });
+
+        const layout = {
+          margin: { t: 60, r: 60, l: 70, b: 60 },
+          xaxis: { title: 'Year', dtick: 1, tickmode: 'linear', automargin: true },
+          yaxis: { title: metric, automargin: true },
+          annotations: annotations,
+          legend: { x: 0, y: 1.15, orientation: 'h' }
+        };
+
+        Plotly.newPlot(plotDiv, [trace1, trace2], layout, {
+          responsive: true,
+          displaylogo: false,
+          toImageButtonOptions: {
+            format: 'png',
+            filename: `university_comparison_${metric.replace(/\s+/g,'_')}`,
+            scale: 2
+          }
+        });
+      });
+    }
+
+    // initial selection
+    let compareToGlobal = compareSelect.options[0]?.value || names.find(n => n && n.toLowerCase() !== uffName.toLowerCase()) || null;
+    if(compareToGlobal){
+      compareSelect.value = compareToGlobal;
+      renderFor(compareToGlobal);
+    } else {
+      chartsDiv.innerHTML = '<div class="chart-card">Nenhuma universidade disponível para comparação.</div>';
+    }
+
+    // events
+    compareSelect.addEventListener('change', e => {
+      compareToGlobal = e.target.value;
+      renderFor(compareToGlobal);
+    });
+    refreshBtn.addEventListener('click', ()=> location.reload());
+    document.getElementById("applyFilter").addEventListener("click", () => {
+      const minY = parseInt(minYearSelect.value);
+      const maxY = parseInt(maxYearSelect.value);
+      if(minY > maxY){
+        alert("O ano inicial deve ser menor ou igual ao ano final.");
+        return;
+      }
+      if(!compareToGlobal){
+        alert('Selecione uma universidade para comparar.');
+        return;
+      }
+      renderFor(compareToGlobal);
+    });
+
+  } catch(err){
+    statusEl.textContent = 'Error: ' + (err && err.message ? err.message : String(err));
+    console.error(err);
+  }
+
+})();
+</script>
+</body>
+</html>
+
