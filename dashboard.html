@@ -285,10 +285,16 @@
           xaxis: { title: 'Year', dtick: 1, tickmode: 'linear', automargin: true },
           yaxis: { title: metric, automargin: true },
           annotations: annotations,
-          legend: { x: 0, y: 1.15, orientation: 'h' }
+          legend: { x: 0, y: 1.25, orientation: 'h' }
         };
 
-        Plotly.newPlot(plotDiv, [trace1, trace2], layout, {
+        const traces = [trace1];
+
+        if (compareTo !== uffName) {
+          traces.push(trace2);
+        }
+
+        Plotly.newPlot(plotDiv, traces, layout, {
           responsive: true,
           displaylogo: false,
           toImageButtonOptions: {
@@ -301,13 +307,20 @@
     }
 
     // initial selection
-    let compareToGlobal = compareSelect.options[0]?.value || names.find(n => n && n.toLowerCase() !== uffName.toLowerCase()) || null;
-    if(compareToGlobal){
-      compareSelect.value = compareToGlobal;
-      renderFor(compareToGlobal);
-    } else {
-      chartsDiv.innerHTML = '<div class="chart-card">Nenhuma universidade disponível para comparação.</div>';
-    }
+    // let compareToGlobal = compareSelect.options[0]?.value || names.find(n => n && n.toLowerCase() !== uffName.toLowerCase()) || null;
+    // if(compareToGlobal){
+    //   compareSelect.value = compareToGlobal;
+    //   renderFor(compareToGlobal);
+    // } else {
+    //   chartsDiv.innerHTML = '<div class="chart-card">Nenhuma universidade disponível para comparação.</div>';
+    // }
+   
+    let compareToGlobal = uffName;
+
+    
+    compareSelect.value = ""; 
+    renderFor(uffName);
+
 
     // events
     compareSelect.addEventListener('change', e => {
